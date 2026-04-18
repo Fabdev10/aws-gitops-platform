@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - staging
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'aws-gitops-platform' }}
+
+jobs:
+  test:
+    name: Unit and smoke tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+
+      - name: Validate FastAPI endpoints
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from app.main import app
+
+          client = TestClient(app)
+
+          health = client.get('/health')
+          assert health.status_code == 200
+          assert health.json()['status'] == 'ok'
+
+          version = client.get('/version')
+          assert version.status_code == 200
+          assert 'version' in version.json()
+          print('Smoke tests passed.')
+          PY
+
+  docker-build-and-push:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    needs: test
+    # GitHub secrets/vars are unavailable to forked pull requests.
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_GITHUB_OIDC_ROLE_ARN }}
+          role-session-name: github-actions-ci
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws ecr create-repository --repository-name "$ECR_REPOSITORY" --image-scanning-configuration scanOnPush=true --region "$AWS_REGION"
+
+      - name: Build container image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" ./app
+
+      - name: Push image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+        run: |
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "Pushed image: $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
