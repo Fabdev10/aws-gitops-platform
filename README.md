@@ -10,7 +10,7 @@ Developer Push/PR
       v
 GitHub Actions (CI/CD with OIDC)
       |
-      +--> CI: test + build + push image
+      +--> CI: pytest + terraform validate + build + push image
       |
       v
 Amazon ECR (versioned images)
@@ -26,8 +26,10 @@ Application Load Balancer (HTTP -> HTTPS)
       v
 ECS Fargate Tasks (private subnets)
       |
+      +--> Application Auto Scaling (CPU/Memory target tracking)
       +--> Secrets Manager (runtime secret injection)
       +--> CloudWatch Logs (/ecs/...)
+      +--> CloudWatch Alarms (CPU/Memory thresholds)
 
 Networking:
 VPC
@@ -46,6 +48,8 @@ aws-gitops-platform/
 ├── app/
 │   ├── main.py
 │   ├── requirements.txt
+│   ├── tests/
+│   │   └── test_app.py
 │   └── Dockerfile
 ├── infra/
 │   ├── modules/
@@ -71,6 +75,14 @@ aws-gitops-platform/
 - AWS CLI v2
 - Docker
 - ACM certificate in the target AWS region for your domain
+
+## Application endpoints
+
+- GET /health: liveness probe for ALB and ECS health checks
+- GET /ready: readiness probe for rolling deployments
+- GET /version: current application version from APP_VERSION
+- GET /info: runtime metadata (service, version, environment)
+- GET /docs: OpenAPI UI
 
 ## Step-by-step setup
 
@@ -105,6 +117,19 @@ certificate_arn      = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-
 secrets = {
   API_KEY = "arn:aws:secretsmanager:us-east-1:123456789012:secret:staging/app/api-key-xxxxx"
 }
+
+enable_autoscaling        = true
+autoscaling_min_capacity  = 1
+autoscaling_max_capacity  = 3
+autoscaling_cpu_target    = 60
+autoscaling_memory_target = 75
+
+enable_service_alarms             = true
+alarm_cpu_utilization_threshold   = 80
+alarm_memory_utilization_threshold = 85
+alarm_evaluation_periods          = 2
+alarm_period_seconds              = 60
+alarm_actions                     = ["arn:aws:sns:us-east-1:123456789012:staging-alerts"]
 ```
 
 4. Configure production Terraform variables in `infra/envs/production`.
@@ -119,6 +144,19 @@ certificate_arn      = "arn:aws:acm:us-east-1:123456789012:certificate/yyyyyyyy-
 secrets = {
   API_KEY = "arn:aws:secretsmanager:us-east-1:123456789012:secret:production/app/api-key-yyyyy"
 }
+
+enable_autoscaling        = true
+autoscaling_min_capacity  = 2
+autoscaling_max_capacity  = 6
+autoscaling_cpu_target    = 60
+autoscaling_memory_target = 75
+
+enable_service_alarms             = true
+alarm_cpu_utilization_threshold   = 80
+alarm_memory_utilization_threshold = 85
+alarm_evaluation_periods          = 2
+alarm_period_seconds              = 60
+alarm_actions                     = ["arn:aws:sns:us-east-1:123456789012:production-alerts"]
 ```
 
 5. Deploy infrastructure for each environment.
@@ -171,8 +209,41 @@ Required variables:
 
 ```bash
 curl https://<alb-dns>/health
+curl https://<alb-dns>/ready
 curl https://<alb-dns>/version
+curl https://<alb-dns>/info
 ```
+
+## Local development
+
+Run the app locally:
+
+```bash
+cd app
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8080
+```
+
+Run test suite:
+
+```bash
+pytest -q app/tests
+```
+
+## CI quality gates
+
+- Python tests run via pytest against API endpoints
+- Terraform formatting check runs on both staging and production stacks
+- Terraform validation runs with backend disabled to catch configuration regressions early
+- Docker build and ECR push run only after all checks pass
+
+## Reliability features
+
+- ECS service autoscaling via target tracking policies on CPU and memory
+- CloudWatch alarms for high ECS CPU and memory utilization
+- Alarm actions configurable with SNS topics or other supported integrations
 
 ## Notes
 

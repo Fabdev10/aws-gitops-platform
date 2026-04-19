@@ -72,10 +72,21 @@ module "ecs" {
   task_cpu              = var.task_cpu
   task_memory           = var.task_memory
   desired_count         = var.desired_count
+  enable_autoscaling    = var.enable_autoscaling
+  autoscaling_min_capacity = var.autoscaling_min_capacity
+  autoscaling_max_capacity = var.autoscaling_max_capacity
+  autoscaling_cpu_target   = var.autoscaling_cpu_target
+  autoscaling_memory_target = var.autoscaling_memory_target
   private_subnet_ids    = module.networking.private_subnet_ids
   ecs_security_group_id = module.networking.ecs_security_group_id
   target_group_arn      = module.alb.target_group_arn
   secrets               = var.secrets
+  enable_service_alarms            = var.enable_service_alarms
+  alarm_cpu_utilization_threshold  = var.alarm_cpu_utilization_threshold
+  alarm_memory_utilization_threshold = var.alarm_memory_utilization_threshold
+  alarm_evaluation_periods         = var.alarm_evaluation_periods
+  alarm_period_seconds             = var.alarm_period_seconds
+  alarm_actions                    = var.alarm_actions
   tags                  = local.common_tags
 }
 

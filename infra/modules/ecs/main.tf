@@ -203,3 +203,108 @@ resource "aws_ecs_service" "this" {
     Module = "ecs"
   })
 }
+
+# Application Auto Scaling target controls ECS service desired count boundaries.
+resource "aws_appautoscaling_target" "ecs_service" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  max_capacity       = var.autoscaling_max_capacity
+  min_capacity       = var.autoscaling_min_capacity
+  resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.this.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+# CPU target tracking policy scales task count based on average CPU usage.
+resource "aws_appautoscaling_policy" "cpu" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  name               = "${var.name}-cpu-scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs_service[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs_service[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs_service[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+
+    target_value = var.autoscaling_cpu_target
+  }
+}
+
+# Memory target tracking policy complements CPU policy during bursty workloads.
+resource "aws_appautoscaling_policy" "memory" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  name               = "${var.name}-memory-scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs_service[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs_service[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs_service[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+
+    target_value = var.autoscaling_memory_target
+  }
+}
+
+# CPU alarm highlights sustained high service usage.
+resource "aws_cloudwatch_metric_alarm" "ecs_high_cpu" {
+  count = var.enable_service_alarms ? 1 : 0
+
+  alarm_name          = "${var.name}-ecs-high-cpu"
+  alarm_description   = "ECS service CPU utilization is above threshold"
+  namespace           = "AWS/ECS"
+  metric_name         = "CPUUtilization"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = var.alarm_cpu_utilization_threshold
+  evaluation_periods  = var.alarm_evaluation_periods
+  period              = var.alarm_period_seconds
+  statistic           = "Average"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+  ok_actions          = var.alarm_actions
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.this.name
+    ServiceName = aws_ecs_service.this.name
+  }
+
+  tags = merge(var.tags, {
+    Name   = "${var.name}-ecs-high-cpu"
+    Module = "ecs"
+  })
+}
+
+# Memory alarm highlights sustained high service usage.
+resource "aws_cloudwatch_metric_alarm" "ecs_high_memory" {
+  count = var.enable_service_alarms ? 1 : 0
+
+  alarm_name          = "${var.name}-ecs-high-memory"
+  alarm_description   = "ECS service memory utilization is above threshold"
+  namespace           = "AWS/ECS"
+  metric_name         = "MemoryUtilization"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = var.alarm_memory_utilization_threshold
+  evaluation_periods  = var.alarm_evaluation_periods
+  period              = var.alarm_period_seconds
+  statistic           = "Average"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+  ok_actions          = var.alarm_actions
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.this.name
+    ServiceName = aws_ecs_service.this.name
+  }
+
+  tags = merge(var.tags, {
+    Name   = "${var.name}-ecs-high-memory"
+    Module = "ecs"
+  })
+}

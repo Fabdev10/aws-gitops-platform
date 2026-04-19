@@ -16,7 +16,7 @@ env:
 
 jobs:
   test:
-    name: Unit and smoke tests
+    name: Python tests
     runs-on: ubuntu-latest
 
     steps:
@@ -35,28 +35,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r app/requirements.txt
 
-      - name: Validate FastAPI endpoints
+      - name: Run pytest
         run: |
-          python - <<'PY'
-          from fastapi.testclient import TestClient
-          from app.main import app
+          pytest -q app/tests
 
-          client = TestClient(app)
+  terraform-validate:
+    name: Terraform fmt and validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - staging
+          - production
 
-          health = client.get('/health')
-          assert health.status_code == 200
-          assert health.json()['status'] == 'ok'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-          version = client.get('/version')
-          assert version.status_code == 200
-          assert 'version' in version.json()
-          print('Smoke tests passed.')
-          PY
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Terraform format check
+        working-directory: infra/envs/${{ matrix.environment }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init (no backend)
+        working-directory: infra/envs/${{ matrix.environment }}
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: infra/envs/${{ matrix.environment }}
+        run: terraform validate
 
   docker-build-and-push:
     name: Build and publish image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, terraform-validate]
     # GitHub secrets/vars are unavailable to forked pull requests.
     if: ${{ github.event.pull_request.head.repo.fork == false }}
 

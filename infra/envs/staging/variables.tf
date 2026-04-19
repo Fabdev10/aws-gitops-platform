@@ -60,6 +60,36 @@ variable "desired_count" {
   default     = 1
 }
 
+variable "enable_autoscaling" {
+  description = "Enable ECS service autoscaling in staging."
+  type        = bool
+  default     = true
+}
+
+variable "autoscaling_min_capacity" {
+  description = "Minimum ECS tasks in staging autoscaling policy."
+  type        = number
+  default     = 1
+}
+
+variable "autoscaling_max_capacity" {
+  description = "Maximum ECS tasks in staging autoscaling policy."
+  type        = number
+  default     = 3
+}
+
+variable "autoscaling_cpu_target" {
+  description = "CPU target percentage for staging autoscaling."
+  type        = number
+  default     = 60
+}
+
+variable "autoscaling_memory_target" {
+  description = "Memory target percentage for staging autoscaling."
+  type        = number
+  default     = 75
+}
+
 variable "task_cpu" {
   description = "Fargate task CPU units."
   type        = number
@@ -76,4 +106,40 @@ variable "secrets" {
   description = "Map of environment variable name to Secrets Manager ARN."
   type        = map(string)
   default     = {}
+}
+
+variable "enable_service_alarms" {
+  description = "Enable ECS CloudWatch alarms in staging."
+  type        = bool
+  default     = true
+}
+
+variable "alarm_cpu_utilization_threshold" {
+  description = "CPU alarm threshold percentage for staging ECS service."
+  type        = number
+  default     = 80
+}
+
+variable "alarm_memory_utilization_threshold" {
+  description = "Memory alarm threshold percentage for staging ECS service."
+  type        = number
+  default     = 85
+}
+
+variable "alarm_evaluation_periods" {
+  description = "Number of periods to evaluate before triggering staging alarm."
+  type        = number
+  default     = 2
+}
+
+variable "alarm_period_seconds" {
+  description = "CloudWatch alarm period in seconds for staging."
+  type        = number
+  default     = 60
+}
+
+variable "alarm_actions" {
+  description = "List of alarm action ARNs for staging alarms (for example SNS)."
+  type        = list(string)
+  default     = []
 }
