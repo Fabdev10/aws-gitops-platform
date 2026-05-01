@@ -79,9 +79,11 @@ aws-gitops-platform/
 ## Application endpoints
 
 - GET /health: liveness probe for ALB and ECS health checks
-- GET /ready: readiness probe for rolling deployments
+- GET /ready: readiness probe for rolling deployments that returns 503 when required secrets are missing
 - GET /version: current application version from APP_VERSION
-- GET /info: runtime metadata (service, version, environment)
+- GET /info: runtime metadata (service, version, environment, region, git SHA, hostname)
+- GET /config: sanitized runtime configuration without exposing secret values
+- GET /diagnostics: deployment diagnostics with uptime and missing required secret names
 - GET /docs: OpenAPI UI
 
 ## Step-by-step setup
@@ -223,8 +225,17 @@ cd app
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8080
+uvicorn app.main:app --reload --port 8080
 ```
+
+Optional runtime variables:
+
+- `APP_ENV`: logical environment name shown by the API
+- `APP_VERSION`: release version exposed by `/version`
+- `AWS_REGION`: region included in runtime metadata
+- `GIT_SHA`: commit identifier exposed by `/info` and `/diagnostics`
+- `LOG_LEVEL`: sanitized setting returned by `/config`
+- `REQUIRED_SECRETS`: comma-separated env var names that must exist for `/ready` to return 200
 
 Run test suite:
 
