@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import _reset_runtime_metrics, app
 from app.settings import get_settings
 
 
@@ -11,7 +11,9 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def reset_settings_cache() -> None:
     get_settings.cache_clear()
+    _reset_runtime_metrics()
     yield
+    _reset_runtime_metrics()
     get_settings.cache_clear()
 
 
@@ -95,6 +97,32 @@ def test_diagnostics_endpoint_exposes_runtime_state(monkeypatch: pytest.MonkeyPa
     assert payload["uptime_seconds"] >= 0
 
 
+def test_metrics_endpoint_exposes_runtime_counters() -> None:
+    client.get("/health")
+    client.get("/health")
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert 'app_info{service="aws-gitops-platform"' in response.text
+    assert "app_ready_state 1" in response.text
+    assert 'http_requests_total{method="GET",path="/health",status_code="200"} 2' in response.text
+    assert 'http_request_duration_ms_count{method="GET",path="/health",status_code="200"} 2' in response.text
+
+
+def test_metrics_endpoint_reflects_missing_required_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REQUIRED_SECRETS", "API_KEY")
+
+    client.get("/ready")
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "app_ready_state 0" in response.text
+    assert "app_missing_required_secrets 1" in response.text
+    assert 'http_requests_total{method="GET",path="/ready",status_code="503"} 1' in response.text
+
+
 def test_runtime_headers_are_added_to_responses() -> None:
     response = client.get("/health", headers={"x-request-id": "req-123"})
 
@@ -115,3 +143,4 @@ def test_root_endpoint_exposes_links() -> None:
     assert payload["info"] == "/info"
     assert payload["config"] == "/config"
     assert payload["diagnostics"] == "/diagnostics"
+    assert payload["metrics"] == "/metrics"

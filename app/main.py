@@ -1,15 +1,20 @@
+from collections import defaultdict
 from os import getenv
 from socket import gethostname
+from threading import Lock
 from time import monotonic, perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.settings import get_settings
 
 START_TIME = monotonic()
 settings = get_settings()
+REQUEST_METRICS_LOCK = Lock()
+REQUEST_COUNTS: dict[tuple[str, str, int], int] = defaultdict(int)
+REQUEST_DURATION_MS: dict[tuple[str, str, int], float] = defaultdict(float)
 
 app = FastAPI(
     title=settings.service_name,
@@ -27,14 +32,56 @@ def _missing_required_secrets() -> list[str]:
     return [secret_name for secret_name in runtime_settings.required_secrets if not getenv(secret_name)]
 
 
+def _label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _request_path_label(request: Request) -> str:
+    route = request.scope.get("route")
+    return getattr(route, "path", request.url.path)
+
+
+def _record_request_metric(method: str, path: str, status_code: int, duration_ms: float) -> None:
+    metric_key = (method, path, status_code)
+    with REQUEST_METRICS_LOCK:
+        REQUEST_COUNTS[metric_key] += 1
+        REQUEST_DURATION_MS[metric_key] += duration_ms
+
+
+def _snapshot_request_metrics() -> list[tuple[str, str, int, int, float]]:
+    with REQUEST_METRICS_LOCK:
+        return [
+            (method, path, status_code, count, REQUEST_DURATION_MS[(method, path, status_code)])
+            for (method, path, status_code), count in sorted(REQUEST_COUNTS.items())
+        ]
+
+
+def _reset_runtime_metrics() -> None:
+    with REQUEST_METRICS_LOCK:
+        REQUEST_COUNTS.clear()
+        REQUEST_DURATION_MS.clear()
+
+
 @app.middleware("http")
 async def add_runtime_headers(request: Request, call_next):
     request_id = request.headers.get("x-request-id", str(uuid4()))
     started_at = perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        _record_request_metric(
+            request.method,
+            _request_path_label(request),
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            (perf_counter() - started_at) * 1000,
+        )
+        raise
+
+    duration_ms = (perf_counter() - started_at) * 1000
     response.headers["X-Request-ID"] = request_id
-    response.headers["X-Response-Time-ms"] = f"{(perf_counter() - started_at) * 1000:.2f}"
+    response.headers["X-Response-Time-ms"] = f"{duration_ms:.2f}"
     response.headers["X-Service-Version"] = get_settings().version
+    _record_request_metric(request.method, _request_path_label(request), response.status_code, duration_ms)
     return response
 
 
@@ -113,6 +160,51 @@ def diagnostics() -> dict[str, str | bool | float | list[str]]:
     }
 
 
+@app.get("/metrics", tags=["system"], response_class=PlainTextResponse)
+def metrics() -> PlainTextResponse:
+    """Returns a Prometheus-style snapshot of runtime and HTTP request metrics."""
+    runtime_settings = get_settings()
+    missing_secrets = _missing_required_secrets()
+    metric_lines = [
+        "# HELP app_info Build and runtime metadata for the service.",
+        "# TYPE app_info gauge",
+        (
+            f'app_info{{service="{_label_value(runtime_settings.service_name)}",'
+            f'version="{_label_value(runtime_settings.version)}",'
+            f'environment="{_label_value(runtime_settings.environment)}",'
+            f'aws_region="{_label_value(runtime_settings.aws_region)}",'
+            f'git_sha="{_label_value(runtime_settings.git_sha)}"}} 1'
+        ),
+        "# HELP app_uptime_seconds Service uptime in seconds.",
+        "# TYPE app_uptime_seconds gauge",
+        f"app_uptime_seconds {round(monotonic() - START_TIME, 3)}",
+        "# HELP app_ready_state Readiness state where 1 means ready and 0 means degraded.",
+        "# TYPE app_ready_state gauge",
+        f"app_ready_state {0 if missing_secrets else 1}",
+        "# HELP app_missing_required_secrets Number of required secrets that are currently missing.",
+        "# TYPE app_missing_required_secrets gauge",
+        f"app_missing_required_secrets {len(missing_secrets)}",
+        "# HELP http_requests_total Total HTTP requests processed by route, method, and status code.",
+        "# TYPE http_requests_total counter",
+        "# HELP http_request_duration_ms_sum Cumulative request duration in milliseconds by route, method, and status code.",
+        "# TYPE http_request_duration_ms_sum counter",
+        "# HELP http_request_duration_ms_count Number of request duration samples by route, method, and status code.",
+        "# TYPE http_request_duration_ms_count counter",
+    ]
+
+    for method, path, status_code, count, duration_ms_sum in _snapshot_request_metrics():
+        labels = (
+            f'method="{_label_value(method)}",'
+            f'path="{_label_value(path)}",'
+            f'status_code="{status_code}"'
+        )
+        metric_lines.append(f"http_requests_total{{{labels}}} {count}")
+        metric_lines.append(f"http_request_duration_ms_sum{{{labels}}} {duration_ms_sum:.3f}")
+        metric_lines.append(f"http_request_duration_ms_count{{{labels}}} {count}")
+
+    return PlainTextResponse("\n".join(metric_lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 @app.get("/", tags=["system"])
 def root() -> dict[str, str]:
     runtime_settings = get_settings()
@@ -125,4 +217,5 @@ def root() -> dict[str, str]:
         "info": "/info",
         "config": "/config",
         "diagnostics": "/diagnostics",
+        "metrics": "/metrics",
     }

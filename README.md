@@ -84,6 +84,7 @@ aws-gitops-platform/
 - GET /info: runtime metadata (service, version, environment, region, git SHA, hostname)
 - GET /config: sanitized runtime configuration without exposing secret values
 - GET /diagnostics: deployment diagnostics with uptime and missing required secret names
+- GET /metrics: Prometheus-style runtime and HTTP request counters for dashboards and alerting
 - GET /docs: OpenAPI UI
 
 ## Step-by-step setup
@@ -214,6 +215,7 @@ curl https://<alb-dns>/health
 curl https://<alb-dns>/ready
 curl https://<alb-dns>/version
 curl https://<alb-dns>/info
+curl https://<alb-dns>/metrics
 ```
 
 ## Local development
