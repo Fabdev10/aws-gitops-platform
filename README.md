@@ -30,6 +30,7 @@ ECS Fargate Tasks (private subnets)
       +--> Secrets Manager (runtime secret injection)
       +--> CloudWatch Logs (/ecs/...)
       +--> CloudWatch Alarms (CPU/Memory thresholds)
+      +--> CloudWatch Dashboard (ECS + ALB operational view)
 
 Networking:
 VPC
@@ -84,6 +85,7 @@ aws-gitops-platform/
 - GET /info: runtime metadata (service, version, environment, region, git SHA, hostname)
 - GET /config: sanitized runtime configuration without exposing secret values
 - GET /diagnostics: deployment diagnostics with uptime and missing required secret names
+- GET /status: compact operational summary with readiness and request outcome counters
 - GET /metrics: Prometheus-style runtime and HTTP request counters for dashboards and alerting
 - GET /docs: OpenAPI UI
 
@@ -133,6 +135,7 @@ alarm_memory_utilization_threshold = 85
 alarm_evaluation_periods          = 2
 alarm_period_seconds              = 60
 alarm_actions                     = ["arn:aws:sns:us-east-1:123456789012:staging-alerts"]
+enable_observability_dashboard    = true
 ```
 
 4. Configure production Terraform variables in `infra/envs/production`.
@@ -160,6 +163,7 @@ alarm_memory_utilization_threshold = 85
 alarm_evaluation_periods          = 2
 alarm_period_seconds              = 60
 alarm_actions                     = ["arn:aws:sns:us-east-1:123456789012:production-alerts"]
+enable_observability_dashboard    = true
 ```
 
 5. Deploy infrastructure for each environment.

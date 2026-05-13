@@ -97,6 +97,24 @@ def test_diagnostics_endpoint_exposes_runtime_state(monkeypatch: pytest.MonkeyPa
     assert payload["uptime_seconds"] >= 0
 
 
+def test_status_endpoint_exposes_operational_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REQUIRED_SECRETS", "API_KEY")
+
+    client.get("/health")
+    client.get("/ready")
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["service"] == "aws-gitops-platform"
+    assert payload["ready"] is False
+    assert payload["missing_secrets"] == ["API_KEY"]
+    assert payload["requests_total"] >= 2
+    assert payload["requests_2xx"] >= 1
+    assert payload["requests_5xx"] >= 1
+    assert payload["uptime_seconds"] >= 0
+
+
 def test_metrics_endpoint_exposes_runtime_counters() -> None:
     client.get("/health")
     client.get("/health")
@@ -143,4 +161,5 @@ def test_root_endpoint_exposes_links() -> None:
     assert payload["info"] == "/info"
     assert payload["config"] == "/config"
     assert payload["diagnostics"] == "/diagnostics"
+    assert payload["status"] == "/status"
     assert payload["metrics"] == "/metrics"

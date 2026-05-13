@@ -90,6 +90,21 @@ module "ecs" {
   tags                  = local.common_tags
 }
 
+# CloudWatch dashboard for high-level service and load balancer observability.
+module "observability" {
+  source = "../../modules/observability"
+
+  name                    = local.name
+  region                  = var.region
+  ecs_cluster_name        = module.ecs.cluster_name
+  ecs_service_name        = module.ecs.service_name
+  alb_name                = local.name
+  alb_arn_suffix          = module.alb.alb_arn_suffix
+  target_group_arn_suffix = module.alb.target_group_arn_suffix
+  enabled                 = var.enable_observability_dashboard
+  tags                    = local.common_tags
+}
+
 output "ecr_repository_url" {
   description = "ECR URL to push images used by staging deployment."
   value       = module.ecr.repository_url
@@ -108,4 +123,9 @@ output "ecs_cluster_name" {
 output "ecs_service_name" {
   description = "Staging ECS service name."
   value       = module.ecs.service_name
+}
+
+output "observability_dashboard_name" {
+  description = "Staging CloudWatch dashboard name."
+  value       = module.observability.dashboard_name
 }

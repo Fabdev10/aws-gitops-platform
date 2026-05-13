@@ -160,6 +160,30 @@ def diagnostics() -> dict[str, str | bool | float | list[str]]:
     }
 
 
+@app.get("/status", tags=["system"])
+def status_summary() -> dict[str, str | bool | int | float | list[str]]:
+    """Returns a compact operational summary for runbooks and incident checks."""
+    runtime_settings = get_settings()
+    missing_secrets = _missing_required_secrets()
+    request_metrics = _snapshot_request_metrics()
+
+    total_requests = sum(count for _, _, _, count, _ in request_metrics)
+    status_2xx_requests = sum(count for _, _, status_code, count, _ in request_metrics if 200 <= status_code < 300)
+    status_5xx_requests = sum(count for _, _, status_code, count, _ in request_metrics if status_code >= 500)
+
+    return {
+        "service": runtime_settings.service_name,
+        "environment": runtime_settings.environment,
+        "version": runtime_settings.version,
+        "ready": not missing_secrets,
+        "missing_secrets": missing_secrets,
+        "uptime_seconds": round(monotonic() - START_TIME, 3),
+        "requests_total": total_requests,
+        "requests_2xx": status_2xx_requests,
+        "requests_5xx": status_5xx_requests,
+    }
+
+
 @app.get("/metrics", tags=["system"], response_class=PlainTextResponse)
 def metrics() -> PlainTextResponse:
     """Returns a Prometheus-style snapshot of runtime and HTTP request metrics."""
@@ -217,5 +241,6 @@ def root() -> dict[str, str]:
         "info": "/info",
         "config": "/config",
         "diagnostics": "/diagnostics",
+        "status": "/status",
         "metrics": "/metrics",
     }

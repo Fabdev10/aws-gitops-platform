@@ -143,3 +143,9 @@ variable "alarm_actions" {
   type        = list(string)
   default     = []
 }
+
+variable "enable_observability_dashboard" {
+  description = "Enable the CloudWatch operations dashboard in production."
+  type        = bool
+  default     = true
+}
