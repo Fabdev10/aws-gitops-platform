@@ -163,3 +163,64 @@ def test_root_endpoint_exposes_links() -> None:
     assert payload["diagnostics"] == "/diagnostics"
     assert payload["status"] == "/status"
     assert payload["metrics"] == "/metrics"
+    assert payload["customers"] == "/api/v1/customers"
+
+
+def test_customer_crud_flow() -> None:
+    # 1. List initially empty
+    resp = client.get("/api/v1/customers")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    # 2. Create customer
+    customer_data = {"name": "Fabio", "email": "fabio@example.com"}
+    resp = client.post("/api/v1/customers", json=customer_data)
+    assert resp.status_code == 201
+    created = resp.json()
+    assert "id" in created
+    assert created["name"] == "Fabio"
+    assert created["email"] == "fabio@example.com"
+    assert "created_at" in created
+
+    # 3. List contains the created customer
+    resp = client.get("/api/v1/customers")
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1
+    assert items[0]["id"] == created["id"]
+
+    # 4. Get specific customer
+    resp = client.get(f"/api/v1/customers/{created['id']}")
+    assert resp.status_code == 200
+    assert resp.json() == created
+
+    # 5. Get missing customer returns 404
+    resp = client.get("/api/v1/customers/missing-id")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Customer not found"}
+
+    # 6. Delete customer
+    resp = client.delete(f"/api/v1/customers/{created['id']}")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "deleted"}
+
+    # 7. Get deleted customer returns 404
+    resp = client.get(f"/api/v1/customers/{created['id']}")
+    assert resp.status_code == 404
+
+    # 8. Delete missing customer returns 404
+    resp = client.delete("/api/v1/customers/missing-id")
+    assert resp.status_code == 404
+
+
+def test_customer_metrics() -> None:
+    # Perform some customer operations
+    client.post("/api/v1/customers", json={"name": "Alice", "email": "alice@example.com"})
+    client.post("/api/v1/customers", json={"name": "Bob", "email": "bob@example.com"})
+    client.get("/api/v1/customers")
+
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert "app_customers_total 2" in resp.text
+    assert 'app_customer_operations_total{action="create"} 2' in resp.text
+    assert 'app_customer_operations_total{action="list"} 1' in resp.text

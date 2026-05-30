@@ -59,6 +59,14 @@ module "alb" {
   tags                  = local.common_tags
 }
 
+# DynamoDB table for customer data.
+module "dynamodb" {
+  source = "../../modules/dynamodb"
+
+  name = local.name
+  tags = local.common_tags
+}
+
 # ECS Fargate service that pulls secrets at runtime from Secrets Manager.
 module "ecs" {
   source = "../../modules/ecs"
@@ -87,6 +95,8 @@ module "ecs" {
   alarm_evaluation_periods         = var.alarm_evaluation_periods
   alarm_period_seconds             = var.alarm_period_seconds
   alarm_actions                    = var.alarm_actions
+  customers_table_name             = module.dynamodb.table_name
+  customers_table_arn              = module.dynamodb.table_arn
   tags                  = local.common_tags
 }
 
@@ -128,4 +138,9 @@ output "ecs_service_name" {
 output "observability_dashboard_name" {
   description = "Staging CloudWatch dashboard name."
   value       = module.observability.dashboard_name
+}
+
+output "dynamodb_table_name" {
+  description = "Staging DynamoDB customers table name."
+  value       = module.dynamodb.table_name
 }

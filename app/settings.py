@@ -17,6 +17,7 @@ class RuntimeSettings:
     git_sha: str
     log_level: str
     required_secrets: tuple[str, ...]
+    customers_table: str
 
     @property
     def configured_secret_count(self) -> int:
@@ -33,4 +34,5 @@ def get_settings() -> RuntimeSettings:
         git_sha=getenv("GIT_SHA", "dev"),
         log_level=getenv("LOG_LEVEL", "INFO"),
         required_secrets=_csv_env("REQUIRED_SECRETS"),
+        customers_table=getenv("DYNAMODB_TABLE", ""),
     )

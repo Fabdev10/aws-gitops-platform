@@ -1,12 +1,15 @@
 from collections import defaultdict
+from datetime import datetime, timezone
 from os import getenv
 from socket import gethostname
 from threading import Lock
 from time import monotonic, perf_counter
 from uuid import uuid4
 
+import boto3
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from app.settings import get_settings
 
@@ -15,6 +18,99 @@ settings = get_settings()
 REQUEST_METRICS_LOCK = Lock()
 REQUEST_COUNTS: dict[tuple[str, str, int], int] = defaultdict(int)
 REQUEST_DURATION_MS: dict[tuple[str, str, int], float] = defaultdict(float)
+
+CUSTOMER_METRICS_LOCK = Lock()
+CUSTOMER_OPERATIONS: dict[str, int] = defaultdict(int)
+
+class CustomerCreate(BaseModel):
+    name: str
+    email: str
+
+class Customer(BaseModel):
+    id: str
+    name: str
+    email: str
+    created_at: str
+
+class CustomerStore:
+    def __init__(self):
+        self._lock = Lock()
+        self._in_memory_db: dict[str, dict] = {}
+        self._db_initialized = False
+        self._table = None
+
+    def _get_table(self):
+        if not self._db_initialized:
+            table_name = get_settings().customers_table
+            if table_name:
+                try:
+                    dynamodb = boto3.resource("dynamodb", region_name=get_settings().aws_region)
+                    self._table = dynamodb.Table(table_name)
+                except Exception:
+                    self._table = None
+            self._db_initialized = True
+        return self._table
+
+    def list_customers(self) -> list[dict]:
+        table = self._get_table()
+        if table:
+            try:
+                response = table.scan()
+                return response.get("Items", [])
+            except Exception:
+                pass
+        with self._lock:
+            return list(self._in_memory_db.values())
+
+    def create_customer(self, name: str, email: str) -> dict:
+        customer_id = str(uuid4())
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        item = {
+            "id": customer_id,
+            "name": name,
+            "email": email,
+            "created_at": created_at
+        }
+        table = self._get_table()
+        if table:
+            try:
+                table.put_item(Item=item)
+                return item
+            except Exception:
+                pass
+        with self._lock:
+            self._in_memory_db[customer_id] = item
+        return item
+
+    def get_customer(self, customer_id: str) -> dict | None:
+        table = self._get_table()
+        if table:
+            try:
+                response = table.get_item(Key={"id": customer_id})
+                return response.get("Item")
+            except Exception:
+                pass
+        with self._lock:
+            return self._in_memory_db.get(customer_id)
+
+    def delete_customer(self, customer_id: str) -> bool:
+        table = self._get_table()
+        if table:
+            try:
+                exists = self.get_customer(customer_id) is not None
+                if exists:
+                    table.delete_item(Key={"id": customer_id})
+                    return True
+                return False
+            except Exception:
+                pass
+        with self._lock:
+            if customer_id in self._in_memory_db:
+                del self._in_memory_db[customer_id]
+                return True
+        return False
+
+customer_store = CustomerStore()
 
 app = FastAPI(
     title=settings.service_name,
@@ -60,6 +156,10 @@ def _reset_runtime_metrics() -> None:
     with REQUEST_METRICS_LOCK:
         REQUEST_COUNTS.clear()
         REQUEST_DURATION_MS.clear()
+    with CUSTOMER_METRICS_LOCK:
+        CUSTOMER_OPERATIONS.clear()
+    with customer_store._lock:
+        customer_store._in_memory_db.clear()
 
 
 @app.middleware("http")
@@ -189,6 +289,10 @@ def metrics() -> PlainTextResponse:
     """Returns a Prometheus-style snapshot of runtime and HTTP request metrics."""
     runtime_settings = get_settings()
     missing_secrets = _missing_required_secrets()
+    
+    # Calculate current customers count
+    current_customers_count = len(customer_store.list_customers())
+    
     metric_lines = [
         "# HELP app_info Build and runtime metadata for the service.",
         "# TYPE app_info gauge",
@@ -208,13 +312,25 @@ def metrics() -> PlainTextResponse:
         "# HELP app_missing_required_secrets Number of required secrets that are currently missing.",
         "# TYPE app_missing_required_secrets gauge",
         f"app_missing_required_secrets {len(missing_secrets)}",
+        "# HELP app_customers_total Total number of registered customers.",
+        "# TYPE app_customers_total gauge",
+        f"app_customers_total {current_customers_count}",
+        "# HELP app_customer_operations_total Total customer operations by action.",
+        "# TYPE app_customer_operations_total counter",
+    ]
+
+    with CUSTOMER_METRICS_LOCK:
+        for action, count in sorted(CUSTOMER_OPERATIONS.items()):
+            metric_lines.append(f'app_customer_operations_total{{action="{action}"}} {count}')
+
+    metric_lines.extend([
         "# HELP http_requests_total Total HTTP requests processed by route, method, and status code.",
         "# TYPE http_requests_total counter",
         "# HELP http_request_duration_ms_sum Cumulative request duration in milliseconds by route, method, and status code.",
         "# TYPE http_request_duration_ms_sum counter",
         "# HELP http_request_duration_ms_count Number of request duration samples by route, method, and status code.",
         "# TYPE http_request_duration_ms_count counter",
-    ]
+    ])
 
     for method, path, status_code, count, duration_ms_sum in _snapshot_request_metrics():
         labels = (
@@ -227,6 +343,44 @@ def metrics() -> PlainTextResponse:
         metric_lines.append(f"http_request_duration_ms_count{{{labels}}} {count}")
 
     return PlainTextResponse("\n".join(metric_lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.get("/api/v1/customers", tags=["customers"], response_model=list[Customer])
+def list_customers():
+    """List all customers."""
+    with CUSTOMER_METRICS_LOCK:
+        CUSTOMER_OPERATIONS["list"] += 1
+    return customer_store.list_customers()
+
+
+@app.post("/api/v1/customers", tags=["customers"], response_model=Customer, status_code=status.HTTP_201_CREATED)
+def create_customer(customer_in: CustomerCreate):
+    """Create a new customer."""
+    with CUSTOMER_METRICS_LOCK:
+        CUSTOMER_OPERATIONS["create"] += 1
+    return customer_store.create_customer(customer_in.name, customer_in.email)
+
+
+@app.get("/api/v1/customers/{customer_id}", tags=["customers"], response_model=Customer)
+def get_customer(customer_id: str):
+    """Retrieve a single customer by ID."""
+    with CUSTOMER_METRICS_LOCK:
+        CUSTOMER_OPERATIONS["get"] += 1
+    cust = customer_store.get_customer(customer_id)
+    if not cust:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Customer not found"})
+    return cust
+
+
+@app.delete("/api/v1/customers/{customer_id}", tags=["customers"])
+def delete_customer(customer_id: str):
+    """Delete a customer by ID."""
+    with CUSTOMER_METRICS_LOCK:
+        CUSTOMER_OPERATIONS["delete"] += 1
+    success = customer_store.delete_customer(customer_id)
+    if not success:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Customer not found"})
+    return {"status": "deleted"}
 
 
 @app.get("/", tags=["system"])
@@ -243,4 +397,5 @@ def root() -> dict[str, str]:
         "diagnostics": "/diagnostics",
         "status": "/status",
         "metrics": "/metrics",
+        "customers": "/api/v1/customers",
     }

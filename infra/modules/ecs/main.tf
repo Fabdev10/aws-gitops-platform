@@ -111,6 +111,31 @@ resource "aws_iam_role" "task" {
   })
 }
 
+# Inline policy grants ECS task permission to read and write to the Customer DynamoDB table.
+resource "aws_iam_role_policy" "task_dynamodb" {
+  count = var.customers_table_arn != "" ? 1 : 0
+
+  name = "${var.name}-ecs-task-dynamodb"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:DescribeTable"
+        ]
+        Resource = var.customers_table_arn
+      }
+    ]
+  })
+}
+
 # ECS task definition wires image, logs, and runtime secrets.
 resource "aws_ecs_task_definition" "this" {
   family                   = "${var.name}-task"
@@ -135,6 +160,13 @@ resource "aws_ecs_task_definition" "this" {
           protocol      = "tcp"
         }
       ]
+
+      environment = var.customers_table_name != "" ? [
+        {
+          name  = "DYNAMODB_TABLE"
+          value = var.customers_table_name
+        }
+      ] : []
 
       secrets = [
         for secret_name, secret_arn in var.secrets : {

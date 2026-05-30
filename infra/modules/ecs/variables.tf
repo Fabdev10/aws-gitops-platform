@@ -147,3 +147,16 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "customers_table_name" {
+  description = "The DynamoDB table name for customers."
+  type        = string
+  default     = ""
+}
+
+variable "customers_table_arn" {
+  description = "The DynamoDB table ARN for customers."
+  type        = string
+  default     = ""
+}
+
